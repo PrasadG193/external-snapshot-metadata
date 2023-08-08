@@ -1,0 +1,131 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: external-snapshot-metadata
+  namespace: csi-driver
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: external-snapshot-metadata-cluster-role
+rules:
+# To access snapshotmetadataservice resource
+- apiGroups:
+  - cbt.storage.k8s.io
+  resources:
+  - snapshotmetadataservices
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+# To access tokenreviews and subjectaccessreviews APIs
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+  - get
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+  - get
+# To access volumesnapshot and volumesnapshotcontents
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshots
+  - volumesnapshotcontents
+  verbs:
+  - get
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: external-snapshot-metadata-cluster-role-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: external-snapshot-metadata-cluster-role
+subjects:
+- kind: ServiceAccount
+  name: external-snapshot-metadata
+  namespace: csi-driver
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: external-snapshot-metadata
+  namespace: csi-driver
+spec:
+  selector:
+    matchLabels:
+      name: external-snapshot-metadata
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        name: external-snapshot-metadata
+    spec:
+      serviceAccountName: external-snapshot-metadata
+      containers:
+      - name: csi-hostpath-cbt-service
+        image: prasadg193/sample-csi-cbt-service:latest
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - mountPath: /csi
+          name: socket-dir
+      - name: external-snapshot-metadata
+        image: prasadg193/external-snapshot-metadata:latest
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: server-certs
+          mountPath: /tmp/certificates
+          readOnly: true
+        - mountPath: /csi
+          name: socket-dir
+        env:
+        - name: DRIVER_NAME
+          value: hostpath.csi.k8s.io
+        - name: CBT_SERVER_CERT
+          value: "/tmp/certificates/tls.crt"
+        - name: CBT_SERVER_KEY
+          value: "/tmp/certificates/tls.key"
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+      volumes:
+      - name: server-certs
+        secret:
+          secretName: ext-snap-metadata-certs
+      - hostPath:
+          path: /var/lib/kubelet/plugins/cbt/csi-hostpath
+          type: DirectoryOrCreate
+        name: socket-dir
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: external-snapshot-metadata
+  namespace: csi-driver
+  labels:
+    name: external-snapshot-metadata
+spec:
+  ports:
+  - name: cbt
+    port: 6443
+    protocol: TCP
+    targetPort: 9000
+  selector:
+    name: external-snapshot-metadata
