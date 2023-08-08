@@ -1,0 +1,5 @@
+FROM alpine
+RUN apk add util-linux coreutils && apk update && apk upgrade
+WORKDIR /
+ADD grpc-client .
+CMD ["tail", "/dev/null"]

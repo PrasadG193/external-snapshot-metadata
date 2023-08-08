@@ -19,3 +19,8 @@
 
 # Go workspace file
 go.work
+
+grpc-server
+grpc-client
+bin/
+.tags
