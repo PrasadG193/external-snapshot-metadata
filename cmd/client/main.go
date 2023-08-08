@@ -13,19 +13,35 @@ import (
 
 	cbtv1alpha1 "github.com/PrasadG193/external-snapshot-metadata/pkg/api/cbt/v1alpha1"
 	"github.com/PrasadG193/external-snapshot-metadata/pkg/kube"
+	volsnapv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	authv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	pgrpc "github.com/PrasadG193/external-snapshot-metadata/pkg/grpc"
 )
 
-func main() {
+var (
+	scheme = runtime.NewScheme()
+)
 
+func init() {
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(cbtv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(volsnapv1.AddToScheme(scheme))
+	utilruntime.Must(corev1.AddToScheme(scheme))
+}
+
+func main() {
 	var baseVolumeSnapshot, targetVolumeSnapshot, snapNamespace, clientSA, clientNamespace string
 	flag.StringVar(&baseVolumeSnapshot, "base", "", "base volume snapshot name")
 	flag.StringVar(&targetVolumeSnapshot, "target", "", "target volume snapshot name")
@@ -51,9 +67,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("could not get session params %v", err)
 	}
-	fmt.Println("SA TOKEN::", saToken)
 
-	if err := client.getChangedBlocks(ctx, snapMetadataSvc, baseVolumeSnapshot, targetVolumeSnapshot, saToken); err != nil {
+	if err := client.getChangedBlocks(ctx, snapMetadataSvc, baseVolumeSnapshot, targetVolumeSnapshot, saToken, snapNamespace); err != nil {
 		log.Fatalf("could not get changed blocks %v", err)
 	}
 }
@@ -69,7 +84,7 @@ func NewSnapshotMetadata() Client {
 	if err != nil {
 		log.Fatalf("could not init in cluster config %v", err)
 	}
-	rtCli, err := client.New(kubeConfig, client.Options{})
+	rtCli, err := client.New(config.GetConfigOrDie(), client.Options{Scheme: scheme})
 	if err != nil {
 		log.Fatalf("failed to create dynamic client %v", err)
 	}
@@ -93,11 +108,13 @@ func (c *Client) createSAToken(ctx context.Context, vsList []string, sa, namespa
 			ExpirationSeconds: &expiry,
 		},
 	}
-	token, err := c.kubeCli.CoreV1().ServiceAccounts(namespace).CreateToken(ctx, sa, &tokenReq, metav1.CreateOptions{})
+	tokenResp, err := c.kubeCli.CoreV1().ServiceAccounts(namespace).CreateToken(ctx, sa, &tokenReq, metav1.CreateOptions{})
 	if err != nil {
 		return "", err
 	}
-	return token.Status.Token, nil
+	log.Println("TokenRequest Response::", jsonify(tokenResp))
+
+	return tokenResp.Status.Token, nil
 
 }
 
@@ -123,7 +140,8 @@ func (c *Client) setupSession(ctx context.Context,
 	clientNamespace string,
 ) (*cbtv1alpha1.SnapshotMetadataService, string, error) {
 	// 1. Find Driver name for the snapshot
-	fmt.Printf("## Find driver name for the snapshots\n")
+	fmt.Printf("\n## Discovering SnapshotMetadataService for the driver and creating SA Token \n\n")
+	log.Println("Finding driver name for the snapshots")
 	_, driver, err := kube.GetVolSnapshotInfo(ctx, c.rtCli, baseSnap, snapNamespace)
 	if err != nil {
 		return nil, "", err
@@ -137,6 +155,7 @@ func (c *Client) setupSession(ctx context.Context,
 	audiences := sms.Spec.Audiences
 
 	// 3. Create SA Token with audiences
+	log.Println("Creating SA Token using TokenRequest resource")
 	saToken, err := c.createSAToken(ctx, audiences, clientSA, clientNamespace)
 	if err != nil {
 		return nil, "", err
@@ -151,15 +170,17 @@ func (c *Client) setupSession(ctx context.Context,
 func (c *Client) getChangedBlocks(
 	ctx context.Context,
 	snapMetaSvc *cbtv1alpha1.SnapshotMetadataService,
-	baseVolumeSnapshot string,
-	targetVolumeSnapshot string,
-	saToken string,
+	baseVolumeSnapshot,
+	targetVolumeSnapshot,
+	saToken,
+	snapNamespace string,
 ) error {
 	fmt.Printf("\n## Making gRPC Call on %s endpoint to Get Changed Blocks Metadata...\n\n", snapMetaSvc.Spec.Address)
 
 	c.initGRPCClient(snapMetaSvc.Spec.CACert, snapMetaSvc.Spec.Address)
 	stream, err := c.client.GetDelta(ctx, &pgrpc.GetDeltaRequest{
 		SessionToken:       saToken,
+		SnapshotNamespace:  snapNamespace,
 		BaseSnapshot:       baseVolumeSnapshot,
 		TargetSnapshot:     targetVolumeSnapshot,
 		StartingByteOffset: 0,

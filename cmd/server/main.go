@@ -3,19 +3,27 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
 
+	cbtv1alpha1 "github.com/PrasadG193/external-snapshot-metadata/pkg/api/cbt/v1alpha1"
+	volsnapv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	"github.com/PrasadG193/external-snapshot-metadata/pkg/authn"
 	"github.com/PrasadG193/external-snapshot-metadata/pkg/authz"
@@ -30,6 +38,17 @@ const (
 	podNamespaceEnvKey = "POD_NAMESPACE"
 	driverNameEnvKey   = "DRIVER_NAME"
 )
+
+var (
+	scheme = runtime.NewScheme()
+)
+
+func init() {
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(cbtv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(volsnapv1.AddToScheme(scheme))
+	utilruntime.Must(corev1.AddToScheme(scheme))
+}
 
 func main() {
 	listener, err := net.Listen("tcp", ":9000")
@@ -57,7 +76,7 @@ func newServer() *Server {
 	if err != nil {
 		log.Fatalf("could not init in cluster config %v", err)
 	}
-	rtCli, err := client.New(kubeConfig, client.Options{})
+	rtCli, err := client.New(config.GetConfigOrDie(), client.Options{Scheme: scheme})
 	if err != nil {
 		log.Fatalf("failed to create dynamic client %v", err)
 	}
@@ -84,7 +103,7 @@ func (s *Server) convertParams(ctx context.Context, req *pgrpc.GetDeltaRequest) 
 
 func (s *Server) validateAndTranslateParams(ctx context.Context, req *pgrpc.GetDeltaRequest) (*pgrpc.GetDeltaRequest, error) {
 	newReq := pgrpc.GetDeltaRequest{}
-	log.Println("Validating and translating snapshot names to IDs ")
+	log.Println("Translating snapshot names to IDs ")
 	// The session token is valid for basesnapshot
 	baseSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.BaseSnapshot, req.SnapshotNamespace)
 	if err != nil {
@@ -118,29 +137,32 @@ func (s *Server) getAudiencesForDriver(ctx context.Context) ([]string, error) {
 }
 
 func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.SnapshotMetadata_GetDeltaServer) error {
-	log.Println("Received request::", req.String())
+	log.Println("Received request::", jsonify(req))
 	ctx := context.Background()
 
 	// Find audienceToken from SnapshotMetadataService
+	log.Println("Discovering SnapshotMetadataService for the driver and fetching audiences")
 	audiences, err := s.getAudiencesForDriver(ctx)
 	if err != nil {
+		log.Println("ERROR: ", err.Error())
 		return err
 	}
 
 	// Authenticate request with session Token
 	// TokenAuthenticator uses TokenReview K8s API to validate token
+	log.Println("Authenticate request using TokenReview API")
 	authenticator := authn.NewTokenAuthenticator(s.kubeCli)
 	userInfo, err := authenticator.Authenticate(ctx, req.SessionToken, audiences)
 	if err != nil {
-		log.Println(err.Error())
+		log.Println("ERROR: ", err.Error())
 		return err
 	}
 
 	// Authorize request
 	// SARAuthorizer uses SAR APIs to check if the user identity provided by
 	// authorizer has access to VolumeSnapshot APIs
+	log.Println("Authorize request using SubjectAccessReview APIs")
 	authorizer := authz.NewSARAuthorizer(s.kubeCli)
-
 	allowed, reason, err := authorizer.Authorize(ctx, req.SnapshotNamespace, userInfo)
 	if err != nil {
 		log.Println(err.Error(), reason)
@@ -154,12 +176,15 @@ func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.Snap
 	s.initCSIGRPCClient()
 	spReq, err := s.convertParams(ctx, req)
 	if err != nil {
+		log.Println("ERROR: ", err.Error())
 		return err
 	}
 
 	// Call CSI Driver's GetDelta gRPC
+	log.Println("Calling CSI Driver's gRPC over linux socket and streaming response back")
 	csiStream, err := s.client.GetDelta(ctx, spReq)
 	if err != nil {
+		log.Println("ERROR: ", err.Error())
 		return err
 	}
 	done := make(chan bool)
@@ -219,4 +244,9 @@ func loadTLSCredentials() (credentials.TransportCredentials, error) {
 	}
 
 	return credentials.NewTLS(config), nil
+}
+
+func jsonify(obj interface{}) string {
+	jsonBytes, _ := json.MarshalIndent(obj, "", "  ")
+	return string(jsonBytes)
 }

@@ -34,6 +34,11 @@ push:
 	docker push $(IMAGE_REPO_SERVER):$(IMAGE_TAG_SERVER)
 	docker push $(IMAGE_REPO_CLIENT):$(IMAGE_TAG_CLIENT)
 
+.PHONY: manifests
+manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
+	$(CONTROLLER_GEN) crd paths="./pkg/..." output:crd:artifacts:config=deploy/crd
+
+
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./pkg/..."

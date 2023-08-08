@@ -33,7 +33,7 @@ type SnapshotMetadataServiceStatus struct {
 }
 
 //+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
+//+kubebuilder:resource:scope=Cluster
 
 // SnapshotMetadataService is the Schema for the csisnapshotsessionservices API
 type SnapshotMetadataService struct {
