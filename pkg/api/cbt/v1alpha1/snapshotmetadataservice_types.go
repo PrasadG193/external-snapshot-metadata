@@ -22,10 +22,12 @@ import (
 
 // SnapshotMetadataServiceSpec defines the desired state of SnapshotMetadataService
 type SnapshotMetadataServiceSpec struct {
+	// The audience string value expected in an authentication token for the service
+	Audience string `json:"audiences,omitempty"`
+	// The TCP endpoint address of the service
+	Address string `json:"address,omitempty"`
 	// CABundle client side CA used for server validation
-	CACert    []byte   `json:"caCert,omitempty"`
-	Audiences []string `json:"audiences,omitempty"`
-	Address   string   `json:"address,omitempty"`
+	CACert []byte `json:"caCert,omitempty"`
 }
 
 // SnapshotMetadataServiceStatus defines the observed state of SnapshotMetadataService

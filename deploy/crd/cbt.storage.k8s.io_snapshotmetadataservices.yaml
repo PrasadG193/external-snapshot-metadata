@@ -39,11 +39,12 @@ spec:
               SnapshotMetadataService
             properties:
               address:
+                description: The TCP endpoint address of the service
                 type: string
               audiences:
-                items:
-                  type: string
-                type: array
+                description: The audience string value expected in an authentication
+                  token for the service
+                type: string
               caCert:
                 description: CABundle client side CA used for server validation
                 format: byte
