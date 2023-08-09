@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"time"
 
 	cbtv1alpha1 "github.com/PrasadG193/external-snapshot-metadata/pkg/api/cbt/v1alpha1"
@@ -34,6 +35,8 @@ var (
 	scheme = runtime.NewScheme()
 )
 
+const DefaultTokenPath = "/var/run/secrets/tokens/%s"
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(cbtv1alpha1.AddToScheme(scheme))
@@ -42,12 +45,15 @@ func init() {
 }
 
 func main() {
-	var baseVolumeSnapshot, targetVolumeSnapshot, snapNamespace, clientSA, clientNamespace string
+	var baseVolumeSnapshot, targetVolumeSnapshot, snapNamespace, clientSA, clientNamespace, mountedTokenPath string
+	var useMountedToken bool
 	flag.StringVar(&baseVolumeSnapshot, "base", "", "base volume snapshot name")
 	flag.StringVar(&targetVolumeSnapshot, "target", "", "target volume snapshot name")
 	flag.StringVar(&snapNamespace, "namespace", "default", "snapshot namespace")
 	flag.StringVar(&clientSA, "service-account", "default", "client service account")
 	flag.StringVar(&clientNamespace, "client-namespace", "default", "client namespace")
+	flag.StringVar(&mountedTokenPath, "token-mount-path", DefaultTokenPath, "Path to the token mounted with projected volume")
+	flag.BoolVar(&useMountedToken, "use-projected-token", true, "Use token mounted using project volume instead of creating new with TokenRequest")
 	flag.Parse()
 
 	if baseVolumeSnapshot == "" || targetVolumeSnapshot == "" {
@@ -63,9 +69,11 @@ func main() {
 		targetVolumeSnapshot,
 		snapNamespace,
 		clientSA,
-		clientNamespace)
+		clientNamespace,
+		useMountedToken,
+		mountedTokenPath)
 	if err != nil {
-		log.Fatalf("could not get session params %v", err)
+		log.Fatalf("could not get connection params %v", err)
 	}
 
 	if err := client.getChangedBlocks(ctx, snapMetadataSvc, baseVolumeSnapshot, targetVolumeSnapshot, saToken, snapNamespace); err != nil {
@@ -131,16 +139,42 @@ func (c *Client) initGRPCClient(cacert []byte, URL string) {
 
 }
 
-func (c *Client) setupSecurityAccess(ctx context.Context,
+func (c *Client) getSecurityToken(
+	ctx context.Context,
+	useMountedToken bool,
+	tokenPath,
+	audience,
+	clientSA,
+	clientNamespace string,
+) (string, error) {
+	if useMountedToken {
+		if tokenPath == "" {
+			tokenPath = fmt.Sprintf(DefaultTokenPath, clientSA)
+		}
+		log.Printf("Reading mounted SA Token from %s", tokenPath)
+		token, err := os.ReadFile(tokenPath)
+		if err != nil {
+			return "", err
+		}
+		return string(token), nil
+	}
+	log.Println("Creating SA Token using TokenRequest resource")
+	return c.createSAToken(ctx, audience, clientSA, clientNamespace)
+}
+
+func (c *Client) setupSecurityAccess(
+	ctx context.Context,
 	baseSnap,
 	targetSnap,
 	snapNamespace,
 	clientSA,
 	clientNamespace string,
+	useMountedToken bool,
+	tokenPath string,
 ) (*cbtv1alpha1.SnapshotMetadataService, string, error) {
 	// 1. Find Driver name for the snapshot
 	fmt.Printf("\n## Discovering SnapshotMetadataService for the driver and creating SA Token \n\n")
-	log.Println("Finding driver name for the snapshots")
+	log.Print("Finding driver name for the snapshots")
 	_, driver, err := kube.GetVolSnapshotInfo(ctx, c.rtCli, baseSnap, snapNamespace)
 	if err != nil {
 		return nil, "", err
@@ -154,8 +188,7 @@ func (c *Client) setupSecurityAccess(ctx context.Context,
 	audience := sms.Spec.Audience
 
 	// 3. Create SA Token with audience
-	log.Println("Creating SA Token using TokenRequest resource")
-	saToken, err := c.createSAToken(ctx, audience, clientSA, clientNamespace)
+	saToken, err := c.getSecurityToken(ctx, useMountedToken, tokenPath, audience, clientSA, clientNamespace)
 	if err != nil {
 		return nil, "", err
 	}

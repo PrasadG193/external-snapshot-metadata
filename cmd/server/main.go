@@ -65,7 +65,7 @@ func main() {
 	)
 	reflection.Register(s)
 	pgrpc.RegisterSnapshotMetadataServer(s, newServer())
-	log.Println("SERVER STARTED!")
+	log.Print("SERVER STARTED!")
 	if err := s.Serve(listener); err != nil {
 		log.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func (s *Server) convertParams(ctx context.Context, req *pgrpc.GetDeltaRequest) 
 
 func (s *Server) validateAndTranslateParams(ctx context.Context, req *pgrpc.GetDeltaRequest) (*pgrpc.GetDeltaRequest, error) {
 	newReq := pgrpc.GetDeltaRequest{}
-	log.Println("Translating snapshot names to IDs ")
+	log.Print("Translating snapshot names to IDs ")
 	// The session token is valid for basesnapshot
 	baseSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.BaseSnapshot, req.Namespace)
 	if err != nil {
@@ -138,61 +138,61 @@ func (s *Server) getAudienceForDriver(ctx context.Context) (string, error) {
 
 func (s *Server) authRequest(ctx context.Context, securityToken, namespace string) error {
 	// Find audienceToken from SnapshotMetadataService
-	log.Println("Discovering SnapshotMetadataService for the driver and fetching audience string")
+	log.Print("Discovering SnapshotMetadataService for the driver and fetching audience string")
 	audience, err := s.getAudienceForDriver(ctx)
 	if err != nil {
-		log.Println("ERROR: ", err.Error())
+		log.Print("ERROR: ", err.Error())
 		return err
 	}
 
 	// Authenticate request with session Token
 	// TokenAuthenticator uses TokenReview K8s API to validate token
-	log.Println("Authenticate request using TokenReview API")
+	log.Print("Authenticate request using TokenReview API")
 	authenticator := authn.NewTokenAuthenticator(s.kubeCli)
 	userInfo, err := authenticator.Authenticate(ctx, securityToken, audience)
 	if err != nil {
-		log.Println("ERROR: ", err.Error())
+		log.Print("ERROR: ", err.Error())
 		return err
 	}
 
 	// Authorize request
 	// SARAuthorizer uses SAR APIs to check if the user identity provided by
 	// authorizer has access to VolumeSnapshot APIs
-	log.Println("Authorize request using SubjectAccessReview APIs")
+	log.Print("Authorize request using SubjectAccessReview APIs")
 	authorizer := authz.NewSARAuthorizer(s.kubeCli)
 	allowed, reason, err := authorizer.Authorize(ctx, namespace, userInfo)
 	if err != nil {
-		log.Println(err.Error(), reason)
+		log.Print(err.Error(), reason)
 		return err
 	}
 	if !allowed {
-		log.Println("ERROR: Authorization failed.", reason)
+		log.Print("ERROR: Authorization failed.", reason)
 		return fmt.Errorf("ERROR: Authorization failed, %s", reason)
 	}
 	return nil
 }
 
 func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.SnapshotMetadata_GetDeltaServer) error {
-	log.Println("Received request::", jsonify(req))
+	log.Print("Received request::", jsonify(req))
 	ctx := context.Background()
 
 	if err := s.authRequest(ctx, req.SecurityToken, req.Namespace); err != nil {
-		log.Println("ERROR: ", err.Error())
+		log.Print("ERROR: ", err.Error())
 		return err
 	}
 
 	s.initCSIGRPCClient()
 	spReq, err := s.convertParams(ctx, req)
 	if err != nil {
-		log.Println("ERROR: ", err.Error())
+		log.Print("ERROR: ", err.Error())
 		return err
 	}
 
 	// Call CSI Driver's GetDelta gRPC
-	log.Println("Calling CSI Driver's gRPC over linux socket and streaming response back")
+	log.Print("Calling CSI Driver's gRPC over linux socket and streaming response back")
 	csiStream, err := s.client.GetDelta(ctx, spReq)
 	if err != nil {
-		log.Println("ERROR: ", err.Error())
+		log.Print("ERROR: ", err.Error())
 		return err
 	}
 	done := make(chan bool)
@@ -200,7 +200,7 @@ func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.Snap
 		for {
 			resp, err := csiStream.Recv()
 			if err == io.EOF {
-				log.Println("Received EOF")
+				log.Print("Received EOF")
 				done <- true //means stream is finished
 				return
 			}
@@ -208,7 +208,7 @@ func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.Snap
 				log.Printf(fmt.Sprintf("cannot receive %v", err))
 				return
 			}
-			log.Println("Received response from csi driver, proxying to client")
+			log.Print("Received response from csi driver, proxying to client")
 			if err := cbtClientStream.Send(resp); err != nil {
 				log.Printf(fmt.Sprintf("cannot send %v", err))
 				return
