@@ -105,14 +105,14 @@ func (s *Server) validateAndTranslateParams(ctx context.Context, req *pgrpc.GetD
 	newReq := pgrpc.GetDeltaRequest{}
 	log.Println("Translating snapshot names to IDs ")
 	// The session token is valid for basesnapshot
-	baseSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.BaseSnapshot, req.SnapshotNamespace)
+	baseSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.BaseSnapshot, req.Namespace)
 	if err != nil {
 		return nil, err
 	}
 	log.Printf("Mapping snapshot %s to snapshot id %s\n", req.BaseSnapshot, baseSnapHandle)
 	newReq.BaseSnapshot = baseSnapHandle
 
-	targetSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.TargetSnapshot, req.SnapshotNamespace)
+	targetSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.TargetSnapshot, req.Namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -124,25 +124,22 @@ func (s *Server) validateAndTranslateParams(ctx context.Context, req *pgrpc.GetD
 	return &newReq, nil
 }
 
-func (s *Server) getAudiencesForDriver(ctx context.Context) ([]string, error) {
+func (s *Server) getAudienceForDriver(ctx context.Context) (string, error) {
 	driver := os.Getenv(driverNameEnvKey)
 	if driver == "" {
-		return nil, fmt.Errorf("Missing DRIVER_NAME env value")
+		return "", fmt.Errorf("Missing DRIVER_NAME env value")
 	}
 	sms, err := kube.FindSnapshotMetadataService(ctx, s.rtCli, driver)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	return sms.Spec.Audiences, nil
+	return sms.Spec.Audience, nil
 }
 
-func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.SnapshotMetadata_GetDeltaServer) error {
-	log.Println("Received request::", jsonify(req))
-	ctx := context.Background()
-
+func (s *Server) authRequest(ctx context.Context, securityToken, namespace string) error {
 	// Find audienceToken from SnapshotMetadataService
-	log.Println("Discovering SnapshotMetadataService for the driver and fetching audiences")
-	audiences, err := s.getAudiencesForDriver(ctx)
+	log.Println("Discovering SnapshotMetadataService for the driver and fetching audience string")
+	audience, err := s.getAudienceForDriver(ctx)
 	if err != nil {
 		log.Println("ERROR: ", err.Error())
 		return err
@@ -152,7 +149,7 @@ func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.Snap
 	// TokenAuthenticator uses TokenReview K8s API to validate token
 	log.Println("Authenticate request using TokenReview API")
 	authenticator := authn.NewTokenAuthenticator(s.kubeCli)
-	userInfo, err := authenticator.Authenticate(ctx, req.SessionToken, audiences)
+	userInfo, err := authenticator.Authenticate(ctx, securityToken, audience)
 	if err != nil {
 		log.Println("ERROR: ", err.Error())
 		return err
@@ -163,7 +160,7 @@ func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.Snap
 	// authorizer has access to VolumeSnapshot APIs
 	log.Println("Authorize request using SubjectAccessReview APIs")
 	authorizer := authz.NewSARAuthorizer(s.kubeCli)
-	allowed, reason, err := authorizer.Authorize(ctx, req.SnapshotNamespace, userInfo)
+	allowed, reason, err := authorizer.Authorize(ctx, namespace, userInfo)
 	if err != nil {
 		log.Println(err.Error(), reason)
 		return err
@@ -171,6 +168,17 @@ func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.Snap
 	if !allowed {
 		log.Println("ERROR: Authorization failed.", reason)
 		return fmt.Errorf("ERROR: Authorization failed, %s", reason)
+	}
+	return nil
+}
+
+func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.SnapshotMetadata_GetDeltaServer) error {
+	log.Println("Received request::", jsonify(req))
+	ctx := context.Background()
+
+	if err := s.authRequest(ctx, req.SecurityToken, req.Namespace); err != nil {
+		log.Println("ERROR: ", err.Error())
+		return err
 	}
 
 	s.initCSIGRPCClient()

@@ -5,18 +5,27 @@ syntax="proto3";
 option go_package = "github.com/PrasadG193/external-snapshot-metadata/pkg/grpc";
 
 service SnapshotMetadata {
-	//rpc GetAllocated(GetAllocatedRequest) returns (stream GetAllocatedResponse) {}
+	rpc GetAllocated(GetAllocatedRequest) returns (stream GetAllocatedResponse) {}
 	rpc GetDelta(GetDeltaRequest) returns (stream GetDeltaResponse) {}
 }
 
 message GetDeltaRequest {
-	string session_token = 1;
-	string snapshot_namespace = 2;
+	string security_token = 1;
+  	string namespace = 2;
+  	string volume = 3;
+  	string base_snapshot = 4;
+  	string target_snapshot = 5;
+  	uint64 starting_byte_offset = 6;
+  	uint32 max_results = 7;
+}
+
+message GetAllocatedRequest {
+	string security_token = 1;
+	string namespace = 2;
 	string volume_id = 3;
-	string base_snapshot = 4;
-	string target_snapshot = 5;
-	uint64 starting_byte_offset = 6;
-	uint32 max_results = 7;
+	string snapshot = 4;
+	uint64 starting_offset = 5;
+	uint32 max_results = 6;
 }
 
 enum BlockMetadataType {
@@ -35,3 +44,10 @@ message GetDeltaResponse {
 	uint64 volume_size_bytes = 2;
 	repeated BlockMetadata block_metadata = 3;  
 }
+
+message GetAllocatedResponse {
+	BlockMetadataType block_metadata_type = 1;
+	uint64 volume_size_bytes = 2;
+	repeated BlockMetadata block_metadata = 3;
+}
+

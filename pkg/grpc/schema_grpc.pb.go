@@ -22,7 +22,7 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type SnapshotMetadataClient interface {
-	// rpc GetAllocated(GetAllocatedRequest) returns (stream GetAllocatedResponse) {}
+	GetAllocated(ctx context.Context, in *GetAllocatedRequest, opts ...grpc.CallOption) (SnapshotMetadata_GetAllocatedClient, error)
 	GetDelta(ctx context.Context, in *GetDeltaRequest, opts ...grpc.CallOption) (SnapshotMetadata_GetDeltaClient, error)
 }
 
@@ -34,8 +34,40 @@ func NewSnapshotMetadataClient(cc grpc.ClientConnInterface) SnapshotMetadataClie
 	return &snapshotMetadataClient{cc}
 }
 
+func (c *snapshotMetadataClient) GetAllocated(ctx context.Context, in *GetAllocatedRequest, opts ...grpc.CallOption) (SnapshotMetadata_GetAllocatedClient, error) {
+	stream, err := c.cc.NewStream(ctx, &SnapshotMetadata_ServiceDesc.Streams[0], "/SnapshotMetadata/GetAllocated", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &snapshotMetadataGetAllocatedClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type SnapshotMetadata_GetAllocatedClient interface {
+	Recv() (*GetAllocatedResponse, error)
+	grpc.ClientStream
+}
+
+type snapshotMetadataGetAllocatedClient struct {
+	grpc.ClientStream
+}
+
+func (x *snapshotMetadataGetAllocatedClient) Recv() (*GetAllocatedResponse, error) {
+	m := new(GetAllocatedResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func (c *snapshotMetadataClient) GetDelta(ctx context.Context, in *GetDeltaRequest, opts ...grpc.CallOption) (SnapshotMetadata_GetDeltaClient, error) {
-	stream, err := c.cc.NewStream(ctx, &SnapshotMetadata_ServiceDesc.Streams[0], "/SnapshotMetadata/GetDelta", opts...)
+	stream, err := c.cc.NewStream(ctx, &SnapshotMetadata_ServiceDesc.Streams[1], "/SnapshotMetadata/GetDelta", opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +102,7 @@ func (x *snapshotMetadataGetDeltaClient) Recv() (*GetDeltaResponse, error) {
 // All implementations must embed UnimplementedSnapshotMetadataServer
 // for forward compatibility
 type SnapshotMetadataServer interface {
-	// rpc GetAllocated(GetAllocatedRequest) returns (stream GetAllocatedResponse) {}
+	GetAllocated(*GetAllocatedRequest, SnapshotMetadata_GetAllocatedServer) error
 	GetDelta(*GetDeltaRequest, SnapshotMetadata_GetDeltaServer) error
 	mustEmbedUnimplementedSnapshotMetadataServer()
 }
@@ -79,6 +111,9 @@ type SnapshotMetadataServer interface {
 type UnimplementedSnapshotMetadataServer struct {
 }
 
+func (UnimplementedSnapshotMetadataServer) GetAllocated(*GetAllocatedRequest, SnapshotMetadata_GetAllocatedServer) error {
+	return status.Errorf(codes.Unimplemented, "method GetAllocated not implemented")
+}
 func (UnimplementedSnapshotMetadataServer) GetDelta(*GetDeltaRequest, SnapshotMetadata_GetDeltaServer) error {
 	return status.Errorf(codes.Unimplemented, "method GetDelta not implemented")
 }
@@ -93,6 +128,27 @@ type UnsafeSnapshotMetadataServer interface {
 
 func RegisterSnapshotMetadataServer(s grpc.ServiceRegistrar, srv SnapshotMetadataServer) {
 	s.RegisterService(&SnapshotMetadata_ServiceDesc, srv)
+}
+
+func _SnapshotMetadata_GetAllocated_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(GetAllocatedRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(SnapshotMetadataServer).GetAllocated(m, &snapshotMetadataGetAllocatedServer{stream})
+}
+
+type SnapshotMetadata_GetAllocatedServer interface {
+	Send(*GetAllocatedResponse) error
+	grpc.ServerStream
+}
+
+type snapshotMetadataGetAllocatedServer struct {
+	grpc.ServerStream
+}
+
+func (x *snapshotMetadataGetAllocatedServer) Send(m *GetAllocatedResponse) error {
+	return x.ServerStream.SendMsg(m)
 }
 
 func _SnapshotMetadata_GetDelta_Handler(srv interface{}, stream grpc.ServerStream) error {
@@ -124,6 +180,11 @@ var SnapshotMetadata_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*SnapshotMetadataServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "GetAllocated",
+			Handler:       _SnapshotMetadata_GetAllocated_Handler,
+			ServerStreams: true,
+		},
 		{
 			StreamName:    "GetDelta",
 			Handler:       _SnapshotMetadata_GetDelta_Handler,

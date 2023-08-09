@@ -57,7 +57,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	client := NewSnapshotMetadata()
-	snapMetadataSvc, saToken, err := client.setupSession(
+	snapMetadataSvc, saToken, err := client.setupSecurityAccess(
 		ctx,
 		baseVolumeSnapshot,
 		targetVolumeSnapshot,
@@ -98,13 +98,13 @@ func NewSnapshotMetadata() Client {
 	}
 }
 
-func (c *Client) createSAToken(ctx context.Context, vsList []string, sa, namespace string) (string, error) {
+func (c *Client) createSAToken(ctx context.Context, audience string, sa, namespace string) (string, error) {
 	// https://pkg.go.dev/k8s.io/client-go@v0.27.4/kubernetes/typed/core/v1#ServiceAccountInterface
 	expiry := int64(10 * 60)
 	// https://pkg.go.dev/k8s.io/api/authentication/v1#TokenRequest
 	tokenReq := authv1.TokenRequest{
 		Spec: authv1.TokenRequestSpec{
-			Audiences:         vsList, // We can add the volumesnapshot names for which the token is intended for
+			Audiences:         []string{audience},
 			ExpirationSeconds: &expiry,
 		},
 	}
@@ -131,8 +131,7 @@ func (c *Client) initGRPCClient(cacert []byte, URL string) {
 
 }
 
-// Create session and get session parameters with custom resource CSISnapshotSessionAccess
-func (c *Client) setupSession(ctx context.Context,
+func (c *Client) setupSecurityAccess(ctx context.Context,
 	baseSnap,
 	targetSnap,
 	snapNamespace,
@@ -152,21 +151,21 @@ func (c *Client) setupSession(ctx context.Context,
 	if err != nil {
 		return nil, "", err
 	}
-	audiences := sms.Spec.Audiences
+	audience := sms.Spec.Audience
 
-	// 3. Create SA Token with audiences
+	// 3. Create SA Token with audience
 	log.Println("Creating SA Token using TokenRequest resource")
-	saToken, err := c.createSAToken(ctx, audiences, clientSA, clientNamespace)
+	saToken, err := c.createSAToken(ctx, audience, clientSA, clientNamespace)
 	if err != nil {
 		return nil, "", err
 	}
 	return sms, saToken, nil
 }
 
-// Get changed blocks metadata with GetDelta rpc. The session needs to be created before making the rpc call
-// The session is created using CSISnapshotSessionAccess resource
-// Server auth at client side is done with CA Cert received in session params
+// Get changed blocks metadata with GetDelta rpc.
+// The security token needs to be created either using TokenRequest API or ProjectedToken fields in Pod spec
 // The token is used to in the req parameter which is used by the server to authenticate the client
+// Server auth at client side is done with CA Cert found in SnapshotMetadataService resource
 func (c *Client) getChangedBlocks(
 	ctx context.Context,
 	snapMetaSvc *cbtv1alpha1.SnapshotMetadataService,
@@ -179,8 +178,8 @@ func (c *Client) getChangedBlocks(
 
 	c.initGRPCClient(snapMetaSvc.Spec.CACert, snapMetaSvc.Spec.Address)
 	stream, err := c.client.GetDelta(ctx, &pgrpc.GetDeltaRequest{
-		SessionToken:       saToken,
-		SnapshotNamespace:  snapNamespace,
+		SecurityToken:      saToken,
+		Namespace:          snapNamespace,
 		BaseSnapshot:       baseVolumeSnapshot,
 		TargetSnapshot:     targetVolumeSnapshot,
 		StartingByteOffset: 0,

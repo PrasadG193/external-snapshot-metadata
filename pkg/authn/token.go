@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"reflect"
 
 	authv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,12 +19,12 @@ func NewTokenAuthenticator(cli kubernetes.Interface) *TokenAuthenticator {
 	return &TokenAuthenticator{kubeCli: cli}
 }
 
-func (t *TokenAuthenticator) Authenticate(ctx context.Context, token string, audiences []string) (*authv1.UserInfo, error) {
+func (t *TokenAuthenticator) Authenticate(ctx context.Context, token string, audience string) (*authv1.UserInfo, error) {
 	// https://pkg.go.dev/k8s.io/api/authentication/v1#TokenReview
 	tokenReview := authv1.TokenReview{
 		Spec: authv1.TokenReviewSpec{
 			Token:     token,
-			Audiences: audiences,
+			Audiences: []string{audience},
 		},
 	}
 	auth, err := t.kubeCli.AuthenticationV1().TokenReviews().Create(ctx, &tokenReview, metav1.CreateOptions{})
@@ -35,8 +34,8 @@ func (t *TokenAuthenticator) Authenticate(ctx context.Context, token string, aud
 	if !auth.Status.Authenticated {
 		return nil, fmt.Errorf("Forbidden. SA Token authentication failed")
 	}
-	if !reflect.DeepEqual(audiences, auth.Status.Audiences) {
-		return nil, fmt.Errorf("Forbidden. SA Token authentication failed due to invalid audiences")
+	if len(auth.Status.Audiences) == 0 || audience != auth.Status.Audiences[0] {
+		return nil, fmt.Errorf("Forbidden. SA Token authentication failed due to invalid audience")
 	}
 
 	// Debug: log token review resp
