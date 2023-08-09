@@ -53,7 +53,7 @@ func main() {
 	flag.StringVar(&clientSA, "service-account", "default", "client service account")
 	flag.StringVar(&clientNamespace, "client-namespace", "default", "client namespace")
 	flag.StringVar(&mountedTokenPath, "token-mount-path", DefaultTokenPath, "Path to the token mounted with projected volume")
-	flag.BoolVar(&useMountedToken, "use-projected-token", true, "Use token mounted using project volume instead of creating new with TokenRequest")
+	flag.BoolVar(&useMountedToken, "use-projected-token", false, "Use token mounted using project volume instead of creating new with TokenRequest")
 	flag.Parse()
 
 	if baseVolumeSnapshot == "" || targetVolumeSnapshot == "" {
