@@ -17,6 +17,7 @@ import (
 	volsnapv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 	authv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -126,12 +127,33 @@ func (c *Client) createSAToken(ctx context.Context, audience string, sa, namespa
 
 }
 
-func (c *Client) initGRPCClient(cacert []byte, URL string) {
+func (c *Client) streamClientInterceptor(token, namespace string) grpc.StreamClientInterceptor {
+	return func(
+		ctx context.Context,
+		desc *grpc.StreamDesc,
+		cc *grpc.ClientConn,
+		method string,
+		streamer grpc.Streamer,
+		opts ...grpc.CallOption,
+	) (grpc.ClientStream, error) {
+		return streamer(c.attachToken(ctx, token, namespace), desc, cc, method, opts...)
+	}
+}
+
+func (c *Client) attachToken(ctx context.Context, token, namespace string) context.Context {
+	return metadata.AppendToOutgoingContext(ctx, "authorization", token, "namespace", namespace)
+}
+
+func (c *Client) initGRPCClient(cacert []byte, URL, token, namespace string) {
 	tlsCredentials, err := loadTLSCredentials(cacert)
 	if err != nil {
 		log.Fatal("cannot load TLS credentials: ", err)
 	}
-	conn, err := grpc.Dial(URL, grpc.WithTransportCredentials(tlsCredentials))
+	conn, err := grpc.Dial(
+		URL,
+		grpc.WithTransportCredentials(tlsCredentials),
+		grpc.WithStreamInterceptor(c.streamClientInterceptor(token, namespace)),
+	)
 	if err != nil {
 		log.Fatalf("did not connect: %v", err)
 	}
@@ -175,7 +197,7 @@ func (c *Client) setupSecurityAccess(
 	// 1. Find Driver name for the snapshot
 	fmt.Printf("\n## Discovering SnapshotMetadataService for the driver and creating SA Token \n\n")
 	log.Print("Finding driver name for the snapshots")
-	_, driver, err := kube.GetVolSnapshotInfo(ctx, c.rtCli, baseSnap, snapNamespace)
+	_, driver, err := kube.GetVolSnapshotInfo(ctx, c.rtCli, snapNamespace+"/"+baseSnap)
 	if err != nil {
 		return nil, "", err
 	}
@@ -209,12 +231,10 @@ func (c *Client) getChangedBlocks(
 ) error {
 	fmt.Printf("\n## Making gRPC Call on %s endpoint to Get Changed Blocks Metadata...\n\n", snapMetaSvc.Spec.Address)
 
-	c.initGRPCClient(snapMetaSvc.Spec.CACert, snapMetaSvc.Spec.Address)
+	c.initGRPCClient(snapMetaSvc.Spec.CACert, snapMetaSvc.Spec.Address, saToken, snapNamespace)
 	stream, err := c.client.GetDelta(ctx, &pgrpc.GetDeltaRequest{
-		SecurityToken:      saToken,
-		Namespace:          snapNamespace,
-		BaseSnapshot:       baseVolumeSnapshot,
-		TargetSnapshot:     targetVolumeSnapshot,
+		BaseSnapshot:       snapNamespace + "/" + baseVolumeSnapshot,
+		TargetSnapshot:     snapNamespace + "/" + targetVolumeSnapshot,
 		StartingByteOffset: 0,
 		MaxResults:         uint32(256),
 	})
