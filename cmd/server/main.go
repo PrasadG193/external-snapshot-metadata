@@ -9,13 +9,16 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
 
 	cbtv1alpha1 "github.com/PrasadG193/external-snapshot-metadata/pkg/api/cbt/v1alpha1"
 	volsnapv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -55,16 +58,18 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	srv := newServer()
 
 	tlsCredentials, err := loadTLSCredentials()
 	if err != nil {
 		log.Fatal("cannot load TLS credentials: ", err)
 	}
-	s := grpc.NewServer(
+	opts := []grpc.ServerOption{
 		grpc.Creds(tlsCredentials),
-	)
-	reflection.Register(s)
-	pgrpc.RegisterSnapshotMetadataServer(s, newServer())
+		grpc.StreamInterceptor(srv.streamInterceptor),
+	}
+	s := grpc.NewServer(opts...)
+	pgrpc.RegisterSnapshotMetadataServer(s, srv)
 	log.Print("SERVER STARTED!")
 	if err := s.Serve(listener); err != nil {
 		log.Fatal(err)
@@ -103,16 +108,17 @@ func (s *Server) convertParams(ctx context.Context, req *pgrpc.GetDeltaRequest) 
 
 func (s *Server) validateAndTranslateParams(ctx context.Context, req *pgrpc.GetDeltaRequest) (*pgrpc.GetDeltaRequest, error) {
 	newReq := pgrpc.GetDeltaRequest{}
+
 	log.Print("Translating snapshot names to IDs ")
 	// The session token is valid for basesnapshot
-	baseSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.BaseSnapshot, req.Namespace)
+	baseSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.BaseSnapshot)
 	if err != nil {
 		return nil, err
 	}
 	log.Printf("Mapping snapshot %s to snapshot id %s\n", req.BaseSnapshot, baseSnapHandle)
 	newReq.BaseSnapshot = baseSnapHandle
 
-	targetSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.TargetSnapshot, req.Namespace)
+	targetSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.TargetSnapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -136,20 +142,45 @@ func (s *Server) getAudienceForDriver(ctx context.Context) (string, error) {
 	return sms.Spec.Audience, nil
 }
 
-func (s *Server) authRequest(ctx context.Context, securityToken, namespace string) error {
+func (s *Server) streamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	log.Println("Stream interceptor: performing auth checks for req", info.FullMethod)
+	if err := s.authRequest(ss.Context()); err != nil {
+		return err
+	}
+	return handler(srv, ss)
+}
+
+func (s *Server) authRequest(ctx context.Context) error {
+	// Find Security Token
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return status.Errorf(codes.InvalidArgument, "missing metadata")
+	}
+	securityToken := md["authorization"]
+	if len(securityToken) == 0 {
+		return status.Errorf(codes.Unauthenticated, "authorization token is not provided")
+	}
+
+	// TODO: Find better way to get namespace
+	ns := md["namespace"]
+	if len(ns) == 0 {
+		return status.Errorf(codes.Unauthenticated, "namespace is not provided")
+	}
+	namespace := ns[0]
+
 	// Find audienceToken from SnapshotMetadataService
 	log.Print("Discovering SnapshotMetadataService for the driver and fetching audience string")
 	audience, err := s.getAudienceForDriver(ctx)
 	if err != nil {
 		log.Print("ERROR: ", err.Error())
-		return err
+		return status.Errorf(codes.Unauthenticated, err.Error())
 	}
 
 	// Authenticate request with session Token
 	// TokenAuthenticator uses TokenReview K8s API to validate token
 	log.Print("Authenticate request using TokenReview API")
 	authenticator := authn.NewTokenAuthenticator(s.kubeCli)
-	userInfo, err := authenticator.Authenticate(ctx, securityToken, audience)
+	userInfo, err := authenticator.Authenticate(ctx, securityToken[0], audience)
 	if err != nil {
 		log.Print("ERROR: ", err.Error())
 		return err
@@ -175,12 +206,6 @@ func (s *Server) authRequest(ctx context.Context, securityToken, namespace strin
 func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.SnapshotMetadata_GetDeltaServer) error {
 	log.Print("Received request::", jsonify(req))
 	ctx := context.Background()
-
-	if err := s.authRequest(ctx, req.SecurityToken, req.Namespace); err != nil {
-		log.Print("ERROR: ", err.Error())
-		return err
-	}
-
 	s.initCSIGRPCClient()
 	spReq, err := s.convertParams(ctx, req)
 	if err != nil {
@@ -252,6 +277,14 @@ func loadTLSCredentials() (credentials.TransportCredentials, error) {
 	}
 
 	return credentials.NewTLS(config), nil
+}
+
+func findSnapshotNamespace(namespacedName string) (string, error) {
+	sp := strings.Split(namespacedName, "/")
+	if len(sp) != 2 {
+		return "", fmt.Errorf("Invalid parameter. The snapshot names should be passed in namespace/name format.")
+	}
+	return sp[0], nil
 }
 
 func jsonify(obj interface{}) string {
