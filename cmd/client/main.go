@@ -17,7 +17,6 @@ import (
 	volsnapv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/metadata"
 	authv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -127,32 +126,16 @@ func (c *Client) createSAToken(ctx context.Context, audience string, sa, namespa
 
 }
 
-func (c *Client) streamClientInterceptor(token, namespace string) grpc.StreamClientInterceptor {
-	return func(
-		ctx context.Context,
-		desc *grpc.StreamDesc,
-		cc *grpc.ClientConn,
-		method string,
-		streamer grpc.Streamer,
-		opts ...grpc.CallOption,
-	) (grpc.ClientStream, error) {
-		return streamer(c.attachToken(ctx, token, namespace), desc, cc, method, opts...)
-	}
-}
-
-func (c *Client) attachToken(ctx context.Context, token, namespace string) context.Context {
-	return metadata.AppendToOutgoingContext(ctx, "authorization", token, "namespace", namespace)
-}
-
 func (c *Client) initGRPCClient(cacert []byte, URL, token, namespace string) {
 	tlsCredentials, err := loadTLSCredentials(cacert)
 	if err != nil {
 		log.Fatal("cannot load TLS credentials: ", err)
 	}
+	perRPC := ServiceAccountAccess{token: token, namespace: namespace}
 	conn, err := grpc.Dial(
 		URL,
 		grpc.WithTransportCredentials(tlsCredentials),
-		grpc.WithStreamInterceptor(c.streamClientInterceptor(token, namespace)),
+		grpc.WithPerRPCCredentials(perRPC),
 	)
 	if err != nil {
 		log.Fatalf("did not connect: %v", err)
