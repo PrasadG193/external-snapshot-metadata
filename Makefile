@@ -24,7 +24,7 @@ proto:
 .PHONY: build
 build:
 	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build  -o grpc-server ./cmd/server/main.go
-	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build  -o grpc-client ./cmd/client/main.go
+	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build  -o grpc-client ./cmd/client/
 
 image: build
 	docker build --platform=linux/amd64 -t $(IMAGE_REPO_SERVER):$(IMAGE_TAG_SERVER) -f Dockerfile-grpc .
