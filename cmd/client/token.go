@@ -5,14 +5,12 @@ import (
 )
 
 type ServiceAccountAccess struct {
-	token     string
-	namespace string
+	token string
 }
 
 func (sa ServiceAccountAccess) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
 	return map[string]string{
 		"authorization": sa.token,
-		"namespace":     sa.namespace,
 	}, nil
 }
 
