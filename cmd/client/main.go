@@ -131,7 +131,7 @@ func (c *Client) initGRPCClient(cacert []byte, URL, token, namespace string) {
 	if err != nil {
 		log.Fatal("cannot load TLS credentials: ", err)
 	}
-	perRPC := ServiceAccountAccess{token: token, namespace: namespace}
+	perRPC := ServiceAccountAccess{token: token}
 	conn, err := grpc.Dial(
 		URL,
 		grpc.WithTransportCredentials(tlsCredentials),

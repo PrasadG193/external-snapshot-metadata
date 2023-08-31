@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	cbtv1alpha1 "github.com/PrasadG193/external-snapshot-metadata/pkg/api/cbt/v1alpha1"
+	"github.com/PrasadG193/external-snapshot-metadata/pkg/authz"
 	volsnapv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -19,6 +20,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	authv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -29,7 +31,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	"github.com/PrasadG193/external-snapshot-metadata/pkg/authn"
-	"github.com/PrasadG193/external-snapshot-metadata/pkg/authz"
 	pgrpc "github.com/PrasadG193/external-snapshot-metadata/pkg/grpc"
 	"github.com/PrasadG193/external-snapshot-metadata/pkg/kube"
 )
@@ -40,6 +41,8 @@ const (
 
 	podNamespaceEnvKey = "POD_NAMESPACE"
 	driverNameEnvKey   = "DRIVER_NAME"
+
+	userInfoKey = "USERINFO"
 )
 
 var (
@@ -142,38 +145,48 @@ func (s *Server) getAudienceForDriver(ctx context.Context) (string, error) {
 	return sms.Spec.Audience, nil
 }
 
-func (s *Server) streamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-	log.Println("Stream interceptor: performing auth checks for req", info.FullMethod)
-	if err := s.authRequest(ss.Context()); err != nil {
-		return err
-	}
-	return handler(srv, ss)
+func newContextWithUserInfo(ctx context.Context, userinfo *authv1.UserInfo) context.Context {
+	return context.WithValue(ctx, userInfoKey, userinfo)
 }
 
-func (s *Server) authRequest(ctx context.Context) error {
+type wrappedStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (w *wrappedStream) Context() context.Context {
+	return w.ctx
+}
+
+func newWrappedStream(ctx context.Context, s grpc.ServerStream) grpc.ServerStream {
+	return &wrappedStream{s, ctx}
+}
+
+func (s *Server) streamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	log.Println("Stream interceptor: performing auth checks for req", info.FullMethod)
+	userinfo, err := s.authRequest(ss.Context())
+	if err != nil {
+		return err
+	}
+	return handler(srv, newWrappedStream(newContextWithUserInfo(ss.Context(), userinfo), ss))
+}
+
+func (s *Server) authRequest(ctx context.Context) (*authv1.UserInfo, error) {
 	// Find Security Token
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return status.Errorf(codes.InvalidArgument, "missing metadata")
+		return nil, status.Errorf(codes.InvalidArgument, "missing metadata")
 	}
 	securityToken := md["authorization"]
 	if len(securityToken) == 0 {
-		return status.Errorf(codes.Unauthenticated, "authorization token is not provided")
+		return nil, status.Errorf(codes.Unauthenticated, "authorization token is not provided")
 	}
-
-	// TODO: Find better way to get namespace
-	ns := md["namespace"]
-	if len(ns) == 0 {
-		return status.Errorf(codes.Unauthenticated, "namespace is not provided")
-	}
-	namespace := ns[0]
-
 	// Find audienceToken from SnapshotMetadataService
 	log.Print("Discovering SnapshotMetadataService for the driver and fetching audience string")
 	audience, err := s.getAudienceForDriver(ctx)
 	if err != nil {
 		log.Print("ERROR: ", err.Error())
-		return status.Errorf(codes.Unauthenticated, err.Error())
+		return nil, status.Errorf(codes.Unauthenticated, err.Error())
 	}
 
 	// Authenticate request with session Token
@@ -181,6 +194,25 @@ func (s *Server) authRequest(ctx context.Context) error {
 	log.Print("Authenticate request using TokenReview API")
 	authenticator := authn.NewTokenAuthenticator(s.kubeCli)
 	userInfo, err := authenticator.Authenticate(ctx, securityToken[0], audience)
+	if err != nil {
+		log.Print("ERROR: ", err.Error())
+		return nil, err
+	}
+	return userInfo, err
+}
+
+func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.SnapshotMetadata_GetDeltaServer) error {
+	log.Print("Received request::", jsonify(req))
+
+	// Get UserInfo from context
+	ctx := cbtClientStream.Context()
+	userInfo, ok := ctx.Value(userInfoKey).(*authv1.UserInfo)
+	if !ok {
+		log.Print("ERROR: Failed to get userinfo from context")
+		return fmt.Errorf("ERROR: Failed to get userinfo from context")
+	}
+
+	namespace, err := findSnapshotNamespace(req.BaseSnapshot)
 	if err != nil {
 		log.Print("ERROR: ", err.Error())
 		return err
@@ -200,12 +232,7 @@ func (s *Server) authRequest(ctx context.Context) error {
 		log.Print("ERROR: Authorization failed.", reason)
 		return fmt.Errorf("ERROR: Authorization failed, %s", reason)
 	}
-	return nil
-}
 
-func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.SnapshotMetadata_GetDeltaServer) error {
-	log.Print("Received request::", jsonify(req))
-	ctx := context.Background()
 	s.initCSIGRPCClient()
 	spReq, err := s.convertParams(ctx, req)
 	if err != nil {
