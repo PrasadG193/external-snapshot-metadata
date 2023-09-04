@@ -79,6 +79,9 @@ spec:
       containers:
       - name: csi-hostpath-cbt-service
         image: prasadg193/sample-csi-cbt-service:latest
+        args:
+        - "--endpoint=unix://csi/csi.sock"
+
         securityContext:
           privileged: true
         volumeMounts:
@@ -97,6 +100,8 @@ spec:
         env:
         - name: DRIVER_NAME
           value: hostpath.csi.k8s.io
+        - name: CSI_ADDRESS
+          value: /csi/csi.sock
         - name: CBT_SERVER_CERT
           value: "/tmp/certificates/tls.crt"
         - name: CBT_SERVER_KEY
