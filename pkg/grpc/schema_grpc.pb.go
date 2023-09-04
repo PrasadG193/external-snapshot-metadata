@@ -8,6 +8,7 @@ package grpc
 
 import (
 	context "context"
+
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -104,7 +105,6 @@ func (x *snapshotMetadataGetDeltaClient) Recv() (*GetDeltaResponse, error) {
 type SnapshotMetadataServer interface {
 	GetAllocated(*GetAllocatedRequest, SnapshotMetadata_GetAllocatedServer) error
 	GetDelta(*GetDeltaRequest, SnapshotMetadata_GetDeltaServer) error
-	mustEmbedUnimplementedSnapshotMetadataServer()
 }
 
 // UnimplementedSnapshotMetadataServer must be embedded to have forward compatible implementations.
@@ -117,13 +117,11 @@ func (UnimplementedSnapshotMetadataServer) GetAllocated(*GetAllocatedRequest, Sn
 func (UnimplementedSnapshotMetadataServer) GetDelta(*GetDeltaRequest, SnapshotMetadata_GetDeltaServer) error {
 	return status.Errorf(codes.Unimplemented, "method GetDelta not implemented")
 }
-func (UnimplementedSnapshotMetadataServer) mustEmbedUnimplementedSnapshotMetadataServer() {}
 
 // UnsafeSnapshotMetadataServer may be embedded to opt out of forward compatibility for this service.
 // Use of this interface is not recommended, as added methods to SnapshotMetadataServer will
 // result in compilation errors.
 type UnsafeSnapshotMetadataServer interface {
-	mustEmbedUnimplementedSnapshotMetadataServer()
 }
 
 func RegisterSnapshotMetadataServer(s grpc.ServiceRegistrar, srv SnapshotMetadataServer) {
