@@ -114,21 +114,21 @@ func (s *Server) validateAndTranslateParams(ctx context.Context, req *pgrpc.GetD
 
 	log.Print("Translating snapshot names to IDs ")
 	// The session token is valid for basesnapshot
-	baseSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.BaseSnapshot)
+	baseSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.BaseSnapshotId)
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Mapping snapshot %s to snapshot id %s\n", req.BaseSnapshot, baseSnapHandle)
-	newReq.BaseSnapshot = baseSnapHandle
+	log.Printf("Mapping snapshot %s to snapshot id %s\n", req.BaseSnapshotId, baseSnapHandle)
+	newReq.BaseSnapshotId = baseSnapHandle
 
-	targetSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.TargetSnapshot)
+	targetSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.TargetSnapshotId)
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Mapping snapshot %s to snapshot id %s\n", req.TargetSnapshot, targetSnapHandle)
-	newReq.TargetSnapshot = targetSnapHandle
+	log.Printf("Mapping snapshot %s to snapshot id %s\n", req.TargetSnapshotId, targetSnapHandle)
+	newReq.TargetSnapshotId = targetSnapHandle
 
-	newReq.StartingByteOffset = req.StartingByteOffset
+	newReq.StartingOffset = req.StartingOffset
 	newReq.MaxResults = req.MaxResults
 	return &newReq, nil
 }
@@ -212,7 +212,7 @@ func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.Snap
 		return fmt.Errorf("ERROR: Failed to get userinfo from context")
 	}
 
-	namespace, err := findSnapshotNamespace(req.BaseSnapshot)
+	namespace, err := findSnapshotNamespace(req.BaseSnapshotId)
 	if err != nil {
 		log.Print("ERROR: ", err.Error())
 		return err
