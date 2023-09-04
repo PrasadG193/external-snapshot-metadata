@@ -13,11 +13,11 @@ import (
 
 	cbtv1alpha1 "github.com/PrasadG193/external-snapshot-metadata/pkg/api/cbt/v1alpha1"
 	"github.com/PrasadG193/external-snapshot-metadata/pkg/authz"
+	"github.com/kubernetes-csi/csi-lib-utils/connection"
 	volsnapv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	authv1 "k8s.io/api/authentication/v1"
@@ -36,11 +36,9 @@ import (
 )
 
 const (
-	PROTOCOL = "unix"
-	SOCKET   = "/csi/csi.sock"
-
 	podNamespaceEnvKey = "POD_NAMESPACE"
 	driverNameEnvKey   = "DRIVER_NAME"
+	csiAddressKey      = "CSI_ADDRESS"
 
 	userInfoKey = "USERINFO"
 )
@@ -272,20 +270,17 @@ func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.Snap
 }
 
 func (s *Server) initCSIGRPCClient() {
-	dialer := func(ctx context.Context, addr string) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(ctx, PROTOCOL, addr)
-	}
-	options := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(),
-		grpc.WithContextDialer(dialer),
-	}
-	conn, err := grpc.Dial(SOCKET, options...)
+	csiAddr := os.Getenv(CSIAddressKey)
+	csiConn, err := connection.Connect(
+		csiAddr,
+		nil,
+		connection.OnConnectionLoss(connection.ExitOnConnectionLoss()),
+	)
 	if err != nil {
-		log.Fatalf("did not connect: %v", err)
+		log.Printf("error connecting to CSI driver: %v", err)
+		os.Exit(1)
 	}
-	s.client = pgrpc.NewSnapshotMetadataClient(conn)
+	s.client = pgrpc.NewSnapshotMetadataClient(csiConn)
 }
 
 func loadTLSCredentials() (credentials.TransportCredentials, error) {
