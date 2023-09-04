@@ -5,45 +5,119 @@ syntax="proto3";
 option go_package = "github.com/PrasadG193/external-snapshot-metadata/pkg/grpc";
 
 service SnapshotMetadata {
-	rpc GetAllocated(GetAllocatedRequest) returns (stream GetAllocatedResponse) {}
-	rpc GetDelta(GetDeltaRequest) returns (stream GetDeltaResponse) {}
+  rpc GetAllocated(GetAllocatedRequest)
+    returns (stream GetAllocatedResponse) {}
+
+  rpc GetDelta(GetDeltaRequest)
+    returns (stream GetDeltaResponse) {}
 }
 
-message GetDeltaRequest {
-  	string volume = 1;
-  	string base_snapshot = 2;
-  	string target_snapshot = 3;
-  	uint64 starting_byte_offset = 4;
-  	uint32 max_results = 5;
-}
+// BlockMetadata specifies a data range.
+message BlockMetadata {
+  // This is the 0 based byte position in the volume or snapshot,
+  // measured from the start of the object.
+  uint64 byte_offset = 1;
 
-message GetAllocatedRequest {
-	string volume_id = 1;
-	string snapshot = 2;
-	uint64 starting_offset = 3;
-	uint32 max_results = 4;
+  // This is the size of the data range.
+  uint64 size_bytes = 2;
 }
 
 enum BlockMetadataType {
-	FIXED_LENGTH=0;
-	VARIABLE_LENGTH=1;
+  // The FIXED_LENGTH value indicates that data ranges are
+  // returned in fixed size blocks.
+  FIXED_LENGTH=0;
+
+  // The VARIABLE_LENGTH value indicates that data ranges
+  // are returned in potentially variable sized extents.
+  VARIABLE_LENGTH=1;
 }
 
-message BlockMetadata {
-	uint64 byte_offset = 1;
-	uint64 size_bytes = 2;
-	bytes vendor_specific = 3;
+// The GetAllocatedRequest message is used to solicit metadata on the
+// allocated blocks of a snapshot: i.e. this identifies the data ranges
+// that have valid data as they were the target of some previous write
+// operation on the volume.
+message GetAllocatedRequest {
+  // This is the identifier of the snapshot.
+  string snapshot_id = 1;
+
+  // This indicates the zero based starting byte position in the volume
+  // snapshot from which the result should be computed. It is intended
+  // to be used to continue a previously interrupted call.
+  // The plugins may round down this offset to the nearest alignment
+  // boundary based on the BlockMetadataType used.
+  uint64 starting_offset = 2;
+
+  // This is an optional parameter, and if non-zero it specifies the
+  // maximum number of tuples to be returned in each
+  // GetAllocatedResponse message returned by the RPC stream.
+  // The plugin will determine an appropriate value if 0, and is
+  // always free to send less than the requested value.
+  uint32 max_results = 3;
 }
 
-message GetDeltaResponse {
-	BlockMetadataType block_metadata_type = 1;
-	uint64 volume_size_bytes = 2;
-	repeated BlockMetadata block_metadata = 3;  
-}
-
+// GetAllocatedResponse messages are returned in gRPC stream.
+// Cumulatively, they provide information on the allocated data
+// ranges in the snapshot.
 message GetAllocatedResponse {
-	BlockMetadataType block_metadata_type = 1;
-	uint64 volume_size_bytes = 2;
-	repeated BlockMetadata block_metadata = 3;
+  // This specifies the style used in the BlockMetadata sequence.
+  // This value must be the same in all such messages returned by
+  // the stream.
+  BlockMetadataType block_metadata_type = 1;
+
+  // This returns the size of the underlying volume.
+  // This value must be the same in all such messages returned by
+  // the stream.
+  uint64 volume_size_bytes = 2;
+
+  // This is list of data range tuples. The number of entries
+  // in this list is controlled by the max_results value in the
+  // GetAllocatedRequest message.
+  repeated BlockMetadata block_metadata = 3;
 }
 
+// The GetDeltaRequest message is used to solicit metadata on the data
+// ranges that have changed between two snapshots.
+message GetDeltaRequest {
+  // This is the identifier of the snapshot against which changes
+  // are to be computed.
+  string base_snapshot_id = 1;
+
+  // This is the identifier of a second snapshot in the same volume,
+  // created after the base snapshot.
+  string target_snapshot_id = 2;
+
+  // This indicates the zero based starting byte position in the volume
+  // snapshot from which the result should be computed. It is intended
+  // to be used to continue a previously interrupted call.
+  // The plugins may round down this offset to the nearest alignment
+  // boundary based on the BlockMetadataType used.
+  uint64 starting_offset = 3;
+
+  // This is an optional parameter, and if non-zero it specifies the
+  // maximum number of tuples to be returned in each
+  // GetDeltaResponse message returned by the RPC stream.
+  // The plugin will determine an appropriate value if 0, and is
+  // always free to send less than the requested value.
+  uint32 max_results = 4;
+}
+
+// GetDeltaResponse messages are returned in gRPC stream.
+// Cumulatively, they provide information on the data ranges that
+// have changed between the base and target snapshots specified
+// in the GetDeltaRequest message.
+message GetDeltaResponse {
+  // This specifies the style used in the BlockMetadata sequence.
+  // This value must be the same in all such messages returned by
+  // the stream.
+  BlockMetadataType block_metadata_type = 1;
+
+  // This returns the size of the underlying volume.
+  // This value must be the same in all such messages returned by
+  // the stream.
+  uint64 volume_size_bytes = 2;
+
+  // This is list of data range tuples. The number of entries
+  // in this list is controlled by the max_results value in the
+  // GetDeltaRequest message.
+  repeated BlockMetadata block_metadata = 3;
+}

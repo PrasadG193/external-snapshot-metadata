@@ -216,10 +216,10 @@ func (c *Client) getChangedBlocks(
 
 	c.initGRPCClient(snapMetaSvc.Spec.CACert, snapMetaSvc.Spec.Address, saToken, snapNamespace)
 	stream, err := c.client.GetDelta(ctx, &pgrpc.GetDeltaRequest{
-		BaseSnapshot:       snapNamespace + "/" + baseVolumeSnapshot,
-		TargetSnapshot:     snapNamespace + "/" + targetVolumeSnapshot,
-		StartingByteOffset: 0,
-		MaxResults:         uint32(256),
+		BaseSnapshotId:   snapNamespace + "/" + baseVolumeSnapshot,
+		TargetSnapshotId: snapNamespace + "/" + targetVolumeSnapshot,
+		StartingOffset:   0,
+		MaxResults:       uint32(256),
 	})
 	if err != nil {
 		return err
