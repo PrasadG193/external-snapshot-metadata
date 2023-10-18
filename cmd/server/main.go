@@ -15,6 +15,7 @@ import (
 	"github.com/PrasadG193/external-snapshot-metadata/pkg/authz"
 	"github.com/kubernetes-csi/csi-lib-utils/connection"
 	volsnapv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
+	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -246,6 +247,7 @@ func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.Snap
 		return err
 	}
 	done := make(chan bool)
+	errCh := make(chan error, 1)
 	go func() {
 		for {
 			resp, err := csiStream.Recv()
@@ -255,22 +257,29 @@ func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.Snap
 				return
 			}
 			if err != nil {
-				log.Printf(fmt.Sprintf("cannot receive %v", err))
+				errCh <- errors.Wrap(err, "error while receiving response from CSI stream")
 				return
 			}
 			log.Print("Received response from csi driver, proxying to client")
 			if err := cbtClientStream.Send(resp); err != nil {
-				log.Printf(fmt.Sprintf("cannot send %v", err))
+				errCh <- errors.Wrap(err, "error while sending response to client")
 				return
 			}
 		}
 	}()
-	<-done //we will wait until all response is received
+	select {
+	case <-done:
+		// we will wait until all response is received
+		log.Print("Successfully sent all responses to client!")
+	case err := <-errCh:
+		log.Printf(fmt.Sprintf("error while sending data, terminating connection, %v", err))
+		return err
+	}
 	return nil
 }
 
 func (s *Server) initCSIGRPCClient() {
-	csiAddr := os.Getenv(CSIAddressKey)
+	csiAddr := os.Getenv(csiAddressKey)
 	csiConn, err := connection.Connect(
 		csiAddr,
 		nil,
