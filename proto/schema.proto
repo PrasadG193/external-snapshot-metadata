@@ -78,27 +78,35 @@ message GetAllocatedResponse {
 // The GetDeltaRequest message is used to solicit metadata on the data
 // ranges that have changed between two snapshots.
 message GetDeltaRequest {
+  // This is the secret security token presented by client. The token
+  // is used by server to authenticate the client.
+  string security_token = 1;
+
+  // This is Kubernetes namespace for the snapshots against which
+  // changed block metadata are to be computed.
+  string namespace = 2;
+
   // This is the identifier of the snapshot against which changes
   // are to be computed.
-  string base_snapshot_id = 1;
+  string base_snapshot_id = 3;
 
   // This is the identifier of a second snapshot in the same volume,
   // created after the base snapshot.
-  string target_snapshot_id = 2;
+  string target_snapshot_id = 4;
 
   // This indicates the zero based starting byte position in the volume
   // snapshot from which the result should be computed. It is intended
   // to be used to continue a previously interrupted call.
   // The plugins may round down this offset to the nearest alignment
   // boundary based on the BlockMetadataType used.
-  uint64 starting_offset = 3;
+  uint64 starting_offset = 5;
 
   // This is an optional parameter, and if non-zero it specifies the
   // maximum number of tuples to be returned in each
   // GetDeltaResponse message returned by the RPC stream.
   // The plugin will determine an appropriate value if 0, and is
   // always free to send less than the requested value.
-  uint32 max_results = 4;
+  uint32 max_results = 6;
 }
 
 // GetDeltaResponse messages are returned in gRPC stream.
