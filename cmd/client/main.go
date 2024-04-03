@@ -126,22 +126,19 @@ func (c *Client) createSAToken(ctx context.Context, audience string, sa, namespa
 
 }
 
-func (c *Client) initGRPCClient(cacert []byte, URL, token, namespace string) {
+func (c *Client) initGRPCClient(cacert []byte, URL string) {
 	tlsCredentials, err := loadTLSCredentials(cacert)
 	if err != nil {
 		log.Fatal("cannot load TLS credentials: ", err)
 	}
-	perRPC := ServiceAccountAccess{token: token}
 	conn, err := grpc.Dial(
 		URL,
 		grpc.WithTransportCredentials(tlsCredentials),
-		grpc.WithPerRPCCredentials(perRPC),
 	)
 	if err != nil {
 		log.Fatalf("did not connect: %v", err)
 	}
 	c.client = pgrpc.NewSnapshotMetadataClient(conn)
-
 }
 
 func (c *Client) getSecurityToken(
@@ -180,7 +177,7 @@ func (c *Client) setupSecurityAccess(
 	// 1. Find Driver name for the snapshot
 	fmt.Printf("\n## Discovering SnapshotMetadataService for the driver and creating SA Token \n\n")
 	log.Print("Finding driver name for the snapshots")
-	_, driver, err := kube.GetVolSnapshotInfo(ctx, c.rtCli, snapNamespace+"/"+baseSnap)
+	_, driver, err := kube.GetVolSnapshotInfo(ctx, c.rtCli, snapNamespace, baseSnap)
 	if err != nil {
 		return nil, "", err
 	}
@@ -214,10 +211,12 @@ func (c *Client) getChangedBlocks(
 ) error {
 	fmt.Printf("\n## Making gRPC Call on %s endpoint to Get Changed Blocks Metadata...\n\n", snapMetaSvc.Spec.Address)
 
-	c.initGRPCClient(snapMetaSvc.Spec.CACert, snapMetaSvc.Spec.Address, saToken, snapNamespace)
+	c.initGRPCClient(snapMetaSvc.Spec.CACert, snapMetaSvc.Spec.Address)
 	stream, err := c.client.GetDelta(ctx, &pgrpc.GetDeltaRequest{
-		BaseSnapshotId:   snapNamespace + "/" + baseVolumeSnapshot,
-		TargetSnapshotId: snapNamespace + "/" + targetVolumeSnapshot,
+		SecurityToken:    saToken,
+		Namespace:        snapNamespace,
+		BaseSnapshotId:   baseVolumeSnapshot,
+		TargetSnapshotId: targetVolumeSnapshot,
 		StartingOffset:   0,
 		MaxResults:       uint32(256),
 	})
@@ -225,7 +224,7 @@ func (c *Client) getChangedBlocks(
 		return err
 	}
 	done := make(chan bool)
-	fmt.Println("Resp received:")
+	fmt.Println("\n\n## Response received from external-snapshot-metadata service:")
 	go func() {
 		for {
 			resp, err := stream.Recv()
