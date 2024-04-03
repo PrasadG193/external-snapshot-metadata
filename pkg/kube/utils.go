@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
 
 	volsnapv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -36,21 +35,17 @@ func FindSnapshotMetadataService(ctx context.Context, cli client.Client, driver 
 	return &sssList.Items[0], nil
 }
 
-func GetVolSnapshotInfo(ctx context.Context, cli client.Client, namespacedName string) (string, string, error) {
+func GetVolSnapshotInfo(ctx context.Context, cli client.Client, namespace, vsName string) (string, string, error) {
 	volSnap := &volsnapv1.VolumeSnapshot{}
-	vsName := strings.Split(namespacedName, "/")
-	if len(vsName) != 2 {
-		return "", "", fmt.Errorf("Invalid parameter. The snapshot names should be passed in namespace/name format.")
-	}
-	err := cli.Get(ctx, types.NamespacedName{Name: vsName[1], Namespace: vsName[0]}, volSnap)
+	err := cli.Get(ctx, types.NamespacedName{Name: vsName, Namespace: namespace}, volSnap)
 	if err != nil {
 		return "", "", err
 	}
 	if volSnap.Status.ReadyToUse == nil || !*volSnap.Status.ReadyToUse {
-		return "", "", fmt.Errorf("Snapshot snapshot is not ready, name: %s", namespacedName)
+		return "", "", fmt.Errorf("Snapshot snapshot is not ready, name: %s", namespace)
 	}
 	vsc := &volsnapv1.VolumeSnapshotContent{}
-	err1 := cli.Get(ctx, types.NamespacedName{Name: *volSnap.Status.BoundVolumeSnapshotContentName, Namespace: vsName[0]}, vsc)
+	err1 := cli.Get(ctx, types.NamespacedName{Name: *volSnap.Status.BoundVolumeSnapshotContentName, Namespace: namespace}, vsc)
 	if err1 != nil {
 		return "", "", err1
 	}

@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"strings"
 
 	cbtv1alpha1 "github.com/PrasadG193/external-snapshot-metadata/pkg/api/cbt/v1alpha1"
 	"github.com/PrasadG193/external-snapshot-metadata/pkg/authz"
@@ -19,7 +18,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	authv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -68,7 +66,6 @@ func main() {
 	}
 	opts := []grpc.ServerOption{
 		grpc.Creds(tlsCredentials),
-		grpc.StreamInterceptor(srv.streamInterceptor),
 	}
 	s := grpc.NewServer(opts...)
 	pgrpc.RegisterSnapshotMetadataServer(s, srv)
@@ -113,14 +110,14 @@ func (s *Server) validateAndTranslateParams(ctx context.Context, req *pgrpc.GetD
 
 	log.Print("Translating snapshot names to IDs ")
 	// The session token is valid for basesnapshot
-	baseSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.BaseSnapshotId)
+	baseSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.Namespace, req.BaseSnapshotId)
 	if err != nil {
 		return nil, err
 	}
 	log.Printf("Mapping snapshot %s to snapshot id %s\n", req.BaseSnapshotId, baseSnapHandle)
 	newReq.BaseSnapshotId = baseSnapHandle
 
-	targetSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.TargetSnapshotId)
+	targetSnapHandle, _, err := kube.GetVolSnapshotInfo(ctx, s.rtCli, req.Namespace, req.TargetSnapshotId)
 	if err != nil {
 		return nil, err
 	}
@@ -144,42 +141,7 @@ func (s *Server) getAudienceForDriver(ctx context.Context) (string, error) {
 	return sms.Spec.Audience, nil
 }
 
-func newContextWithUserInfo(ctx context.Context, userinfo *authv1.UserInfo) context.Context {
-	return context.WithValue(ctx, userInfoKey, userinfo)
-}
-
-type wrappedStream struct {
-	grpc.ServerStream
-	ctx context.Context
-}
-
-func (w *wrappedStream) Context() context.Context {
-	return w.ctx
-}
-
-func newWrappedStream(ctx context.Context, s grpc.ServerStream) grpc.ServerStream {
-	return &wrappedStream{s, ctx}
-}
-
-func (s *Server) streamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-	log.Println("Stream interceptor: performing auth checks for req", info.FullMethod)
-	userinfo, err := s.authRequest(ss.Context())
-	if err != nil {
-		return err
-	}
-	return handler(srv, newWrappedStream(newContextWithUserInfo(ss.Context(), userinfo), ss))
-}
-
-func (s *Server) authRequest(ctx context.Context) (*authv1.UserInfo, error) {
-	// Find Security Token
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return nil, status.Errorf(codes.InvalidArgument, "missing metadata")
-	}
-	securityToken := md["authorization"]
-	if len(securityToken) == 0 {
-		return nil, status.Errorf(codes.Unauthenticated, "authorization token is not provided")
-	}
+func (s *Server) authRequest(ctx context.Context, securityToken string) (*authv1.UserInfo, error) {
 	// Find audienceToken from SnapshotMetadataService
 	log.Print("Discovering SnapshotMetadataService for the driver and fetching audience string")
 	audience, err := s.getAudienceForDriver(ctx)
@@ -192,7 +154,7 @@ func (s *Server) authRequest(ctx context.Context) (*authv1.UserInfo, error) {
 	// TokenAuthenticator uses TokenReview K8s API to validate token
 	log.Print("Authenticate request using TokenReview API")
 	authenticator := authn.NewTokenAuthenticator(s.kubeCli)
-	userInfo, err := authenticator.Authenticate(ctx, securityToken[0], audience)
+	userInfo, err := authenticator.Authenticate(ctx, securityToken, audience)
 	if err != nil {
 		log.Print("ERROR: ", err.Error())
 		return nil, err
@@ -203,17 +165,11 @@ func (s *Server) authRequest(ctx context.Context) (*authv1.UserInfo, error) {
 func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.SnapshotMetadata_GetDeltaServer) error {
 	log.Print("Received request::", jsonify(req))
 
-	// Get UserInfo from context
 	ctx := cbtClientStream.Context()
-	userInfo, ok := ctx.Value(userInfoKey).(*authv1.UserInfo)
-	if !ok {
-		log.Print("ERROR: Failed to get userinfo from context")
-		return fmt.Errorf("ERROR: Failed to get userinfo from context")
-	}
-
-	namespace, err := findSnapshotNamespace(req.BaseSnapshotId)
+	// Authenticate request with security token and find the user identity
+	userInfo, err := s.authRequest(ctx, req.SecurityToken)
 	if err != nil {
-		log.Print("ERROR: ", err.Error())
+		log.Print("ERROR: Authentication failed.", err.Error())
 		return err
 	}
 
@@ -222,7 +178,7 @@ func (s *Server) GetDelta(req *pgrpc.GetDeltaRequest, cbtClientStream pgrpc.Snap
 	// authorizer has access to VolumeSnapshot APIs
 	log.Print("Authorize request using SubjectAccessReview APIs")
 	authorizer := authz.NewSARAuthorizer(s.kubeCli)
-	allowed, reason, err := authorizer.Authorize(ctx, namespace, userInfo)
+	allowed, reason, err := authorizer.Authorize(ctx, req.Namespace, userInfo)
 	if err != nil {
 		log.Print(err.Error(), reason)
 		return err
@@ -308,14 +264,6 @@ func loadTLSCredentials() (credentials.TransportCredentials, error) {
 	}
 
 	return credentials.NewTLS(config), nil
-}
-
-func findSnapshotNamespace(namespacedName string) (string, error) {
-	sp := strings.Split(namespacedName, "/")
-	if len(sp) != 2 {
-		return "", fmt.Errorf("Invalid parameter. The snapshot names should be passed in namespace/name format.")
-	}
-	return sp[0], nil
 }
 
 func jsonify(obj interface{}) string {
